@@ -30,13 +30,12 @@ jobs:
         run: |
           shellcheck deploy/*.sh
           for script in deploy/*.sh; do bash -n "$script"; done
-          cp .env.example .env
-          docker compose config --quiet
-          docker compose build bot
+          docker compose --env-file .env.example config --quiet
+          docker compose --env-file .env.example build bot
       - name: Smoke test the built image and MongoDB
         run: |
-          docker compose up -d --wait --wait-timeout 180 mongodb
-          docker compose run --rm --no-deps bot node --input-type=module -e '
+          docker compose --env-file .env.example up -d --wait --wait-timeout 180 mongodb
+          docker compose --env-file .env.example run --rm --no-deps bot node --input-type=module -e '
             import assert from "node:assert/strict";
             import { MongoStore } from "./src/store.js";
             import { VoiceTracker } from "./src/tracker.js";
@@ -60,7 +59,10 @@ jobs:
           '
       - name: Clean up CI containers
         if: always()
-        run: docker compose down --volumes
+        run: |
+          if [[ -f compose.yaml && -f .env.example ]]; then
+            docker compose --env-file .env.example down --volumes
+          fi
 
   deploy:
     if: github.ref == 'refs/heads/main'

@@ -11,7 +11,8 @@ else
 fi
 [[ -L $root/current ]] || exit 0
 release=$(readlink -f "$root/current")
-export BOT_IMAGE="vb-bot:$(basename "$release")"
+BOT_IMAGE="vb-bot:$(basename "$release")"
+export BOT_IMAGE
 compose=(docker compose --project-name vb-bot --env-file "$release/.env" -f "$release/compose.yaml")
 
 case ${1:-} in
