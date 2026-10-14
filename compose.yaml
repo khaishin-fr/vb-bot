@@ -1,0 +1,59 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: always
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env}
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  bot:
+    image: ${BOT_IMAGE:-vb-bot:local}
+    build: .
+    restart: always
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "src/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?Set DISCORD_TOKEN in .env}
+      CLIENT_ID: ${CLIENT_ID:?Set CLIENT_ID in .env}
+      GUILD_ID: ${GUILD_ID:-}
+      MONGODB_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/?authSource=admin
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-voice_bot}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - default
+      - database
+
+networks:
+  database:
+    internal: true
+
+volumes:
+  mongo_data:

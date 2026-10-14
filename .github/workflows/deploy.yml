@@ -1,0 +1,161 @@
+name: Test and deploy voice bot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vb-bot-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Check deployment scripts and Compose
+        run: |
+          shellcheck deploy/*.sh
+          for script in deploy/*.sh; do bash -n "$script"; done
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose build bot
+      - name: Smoke test the built image and MongoDB
+        run: |
+          docker compose up -d --wait --wait-timeout 180 mongodb
+          docker compose run --rm --no-deps bot node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { MongoStore } from "./src/store.js";
+            import { VoiceTracker } from "./src/tracker.js";
+            import { renderLeaderboard } from "./src/leaderboard.js";
+            const uri = process.env.MONGODB_URI;
+            const store = await MongoStore.connect(uri, "voice_bot_ci");
+            const tracker = new VoiceTracker(store);
+            tracker.configure("111111111111111111", "222222222222222222", "222222222222222222", 0, "CI message");
+            tracker.sync("111111111111111111", [{ id: "333333333333333333", name: "CI user", bot: false }], 0);
+            tracker.checkpoint("111111111111111111", 5000);
+            tracker.config("111111111111111111").leaderboard = { channelId: "222222222222222222", messageId: "444444444444444444" };
+            await store.save();
+            await store.close();
+            const restored = await MongoStore.connect(uri, "voice_bot_ci");
+            assert.equal(new VoiceTracker(restored).leaderboard("111111111111111111", 9000)[0].totalMs, 5000);
+            assert.equal(new VoiceTracker(restored).channelActivity("111111111111111111", 9000).activeMs, 5000);
+            assert.equal(new VoiceTracker(restored).config("111111111111111111").leaderboard.messageId, "444444444444444444");
+            await restored.close();
+            const png = await renderLeaderboard({ guildName: "CI", channelName: "Voice", entries: [] });
+            assert.equal(png.subarray(1, 4).toString(), "PNG");
+          '
+      - name: Clean up CI containers
+        if: always()
+        run: docker compose down --volumes
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      DEPLOY_HOST: 154.12.224.147
+      DEPLOY_USERNAME: ${{ secrets.DEPLOY_USERNAME || 'root' }}
+      RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install password authentication helper
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y sshpass
+      - name: Prepare SSH and application configuration
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+          GUILD_ID: ${{ secrets.GUILD_ID }}
+          MONGO_ROOT_USERNAME: ${{ vars.MONGO_ROOT_USERNAME || 'voicebot' }}
+          MONGODB_DATABASE: ${{ vars.MONGODB_DATABASE || 'voice_bot' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$SSHPASS" || { echo 'Missing DEPLOY_PASSWORD'; exit 1; }
+          [[ "$DEPLOY_USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo 'Invalid DEPLOY_USERNAME'; exit 1; }
+          node deploy/write-env.js "$RUNNER_TEMP/runtime.env"
+          mkdir -p "$HOME/.ssh"
+          cat > "$HOME/.ssh/config" <<CONFIG
+          Host vb-bot-deploy
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USERNAME
+            PreferredAuthentications password
+            PubkeyAuthentication no
+            KbdInteractiveAuthentication no
+            NumberOfPasswordPrompts 1
+            BatchMode no
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            GlobalKnownHostsFile /dev/null
+            ConnectTimeout 15
+            ConnectionAttempts 3
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          CONFIG
+      - name: Upload a complete release
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/bundle.tar.gz"
+          sshpass -e ssh vb-bot-deploy 'test "$(id -u)" -eq 0 || { echo "Deployment requires the root account." >&2; exit 1; }'
+          sshpass -e ssh vb-bot-deploy "install -d -m 0700 /opt/vb-bot /opt/vb-bot/incoming /opt/vb-bot/incoming/$RELEASE_ID"
+          sshpass -e scp "$RUNNER_TEMP/bundle.tar.gz" "$RUNNER_TEMP/runtime.env" "vb-bot-deploy:/opt/vb-bot/incoming/$RELEASE_ID/"
+      - name: Start deployment independently of the SSH connection
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e ssh vb-bot-deploy "tar -xzf /opt/vb-bot/incoming/$RELEASE_ID/bundle.tar.gz -C /opt/vb-bot/incoming/$RELEASE_ID && systemd-run --unit=vb-bot-deploy-$RELEASE_ID --property=Type=exec --property=RuntimeMaxSec=30min /bin/bash /opt/vb-bot/incoming/$RELEASE_ID/deploy/deploy.sh $RELEASE_ID"
+      - name: Wait for verified deployment
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 2100))
+          while (( SECONDS < deadline )); do
+            status=$(sshpass -e ssh vb-bot-deploy "cat /opt/vb-bot/status/$RELEASE_ID 2>/dev/null || true" 2>/dev/null) || status=unreachable
+            case "$status" in
+              success)
+                echo "Release $RELEASE_ID is healthy."
+                exit 0
+                ;;
+              failed)
+                echo 'Deployment failed. See the server deployment journal; previous release was restored when available.'
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo 'Timed out waiting for the server. Deployment may still be running; check its status before retrying.'
+          exit 1
+      - name: Report troubleshooting command
+        if: failure()
+        run: |
+          echo "On the server: journalctl -u vb-bot-deploy-$RELEASE_ID --no-pager"
+          echo 'Also check: systemctl status vb-bot.service vb-bot-watchdog.timer'
+      - name: Remove runner credentials
+        if: always()
+        run: |
+          rm -f "$HOME/.ssh/config" "$RUNNER_TEMP/runtime.env"

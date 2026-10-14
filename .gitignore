@@ -147,3 +147,10 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Generated leaderboard preview
+preview/
+
+# Dedicated deployment SSH key (if generated from this directory)
+vb-bot-deploy
+vb-bot-deploy.pub

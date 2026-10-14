@@ -1,0 +1,9 @@
+[Unit]
+Description=Recover unhealthy voice bot containers
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vb-bot-control watchdog
+TimeoutStartSec=180

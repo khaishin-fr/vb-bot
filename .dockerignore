@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+node_modules
+preview
+data
+test
+*.log
+vb-bot-deploy
+vb-bot-deploy.pub
+bundle.tar.gz

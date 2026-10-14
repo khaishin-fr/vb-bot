@@ -1,0 +1,17 @@
+[Unit]
+Description=Discord voice bot stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/vb-bot-control up
+TimeoutStartSec=35min
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target
