@@ -96,16 +96,16 @@ test('disconnect gap is never counted', () => {
   assert.equal(f.tracker.leaderboard(G, 101000)[0].totalMs, 6000);
 });
 
-test('alerts use each server message, blue embeds, and only once per solo stay', async () => {
+test('alerts use each server message as plain text and only once per solo stay', async () => {
   const f = fixture();
   f.members(G, [human(), { ...human(B), bot: true }]);
   f.members(H, [human()]);
   await f.runtime.tick();
   await f.runtime.tick();
   assert.equal(f.sent.length, 2);
-  assert.equal(f.sent[0].embeds[0].data.description, 'only one person in vc');
-  assert.equal(f.sent[1].embeds[0].data.description, 'Second server alert');
-  assert.equal(f.sent[0].embeds[0].data.color, BLUE);
+  assert.equal(f.sent[0].content, 'only one person in vc');
+  assert.equal(f.sent[1].content, 'Second server alert');
+  assert.equal(f.sent[0].embeds, undefined);
   f.members(G, [human(), human(B)]);
   await f.runtime.tick();
   assert.equal(f.sent.length, 2);
@@ -179,7 +179,7 @@ test('owners can customize only their own message and blank text is rejected', a
   assert.equal(f.tracker.config(H).alertMessage, 'Second server alert');
   f.members(G, [human()]);
   await f.runtime.tick();
-  assert.deepEqual(f.sent[0].allowedMentions, { parse: [] });
+  assert.deepEqual(f.sent[0].allowedMentions, { parse: ['users'] });
 });
 
 test('code-whitelisted users can edit messages in another server', async () => {
@@ -599,4 +599,42 @@ test('/mytime checks image permissions before rendering', async () => {
   interaction.appPermissions = new PermissionsBitField(PermissionFlagsBits.EmbedLinks);
   await f.runtime.onInteraction(interaction);
   assert.equal(interaction.replies[0].embeds[0].data.title, 'Missing permissions');
+});
+
+test('long plain-text alerts keep user mentions intact and retry only unsent parts', async t => {
+  const f = fixture();
+  const text = 'x'.repeat(1995) + `<@${U}> join @everyone <@&${B}> ` + 'y'.repeat(500);
+  f.tracker.config(G).alertMessage = text;
+  f.members(G, [human()]);
+  const channel = f.guilds.get(G).channels.cache.get(V);
+  const send = channel.send;
+  let attempt = 0;
+  channel.send = async payload => {
+    if (++attempt === 2) throw new Error('Temporary failure');
+    return send(payload);
+  };
+  t.mock.method(console, 'error', () => {});
+  await f.runtime.tick();
+  assert.equal(f.sent.length, 1);
+  await f.runtime.tick();
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent.map(payload => payload.content).join(''), text);
+  assert.ok(f.sent[1].content.includes(`<@${U}>`));
+  for (const payload of f.sent) {
+    assert.ok(payload.content.length <= 2000);
+    assert.equal(payload.embeds, undefined);
+    assert.deepEqual(payload.allowedMentions, { parse: ['users'] });
+  }
+  await f.runtime.tick();
+  assert.equal(f.sent.length, 2);
+});
+
+test('plain-text alert destinations do not require Embed Links', async () => {
+  const f = fixture();
+  const channel = addAlertChannel(f, { permissionsFor: () => new PermissionsBitField([
+    PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+  ]) });
+  const interaction = f.interaction('alert-channel', G, G, { channel });
+  await f.runtime.onInteraction(interaction);
+  assert.equal(interaction.replies[0].embeds[0].data.title, 'Alert channel updated');
 });

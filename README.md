@@ -34,7 +34,7 @@ To copy Discord IDs, enable **User Settings → Advanced → Developer Mode**, t
 | `/leaderboard-channel channel:#leaderboard` | This server's owner / code whitelist | Posts a leaderboard, then deletes and reposts it with an updated image every 30 seconds. |
 | `/leaderboard-stop` | This server's owner / code whitelist | Stops automatic updates, leaving the last image in place. |
 
-`/alert-channel` accepts a text channel or voice-channel chat. The bot needs **View Channel**, **Send Messages**, and **Embed Links** there (plus **Connect** for voice-channel chat). Changing the destination preserves voice times and the custom message; an already-delivered solo alert is not resent.
+`/alert-channel` accepts a text channel or voice-channel chat. The bot needs **View Channel** and **Send Messages** there (plus **Connect** for voice-channel chat). Changing the destination preserves voice times and the custom message; an already-delivered solo alert is not resent.
 
 The persistent leaderboard includes member avatars and individual user VC times, just like `/leaderboard`. Configure the monitored voice channel first. Grant the bot **View Channel**, **Send Messages**, **Embed Links**, **Attach Files**, and **Read Message History** in the leaderboard channel (plus **Connect** for voice-channel chat).
 
@@ -42,7 +42,7 @@ Each server has one automatically updated leaderboard. Its channel/message IDs a
 
 After installing this update, rerun `npm run register` (or the Docker registration command above) to expose the new slash commands. The GitHub deployment workflow registers them automatically.
 
-With exactly one connected human in the configured voice channel, the bot sends a blue embed with **only one person in vc** by default. Custom text supports Discord Markdown, has a 4,000-character limit, and cannot be blank. Mentions in custom messages do not ping users or roles. Omitting `message` when reconfiguring preserves the existing message. `/message` changes the text used for future alerts, without resending an already-delivered solo alert.
+With exactly one connected human in the configured voice channel, the bot sends a plain-text message with **only one person in vc** by default. Custom text supports Discord Markdown, has a 4,000-character limit, and cannot be blank. User mentions such as `<@USER_ID>` can ping; role, `@everyone`, and `@here` mentions stay disabled. Text longer than 2,000 characters is split into multiple messages, keeping user mentions intact. Omitting `message` when reconfiguring preserves the existing message. `/message` changes the text used for future alerts, without resending an already-delivered solo alert.
 
 The bot checks every **five seconds**. It sends once per solo stay, resetting when the channel becomes empty, contains multiple humans, or a different person is alone. Failed sends retry at the next check. Reconfiguring or reconnecting resets the alert. Bots are ignored; muted and deafened humans count. “Active” means connected, not speaking.
 

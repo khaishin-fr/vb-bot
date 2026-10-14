@@ -7,6 +7,21 @@ export const embed = (title, description) => new EmbedBuilder()
   .setColor(BLUE).setTitle(title).setDescription(description)
   .setFooter({ text: 'Voice activity' }).setTimestamp();
 
+function alertParts(text) {
+  const parts = [];
+  let part = '';
+  // Preserve user mentions and Unicode characters across Discord's content limit.
+  for (const token of text.match(/<@!?\d+>|[\s\S]/gu) ?? []) {
+    if (part.length + token.length > 2000) {
+      if (part.trim()) parts.push(part);
+      part = '';
+    }
+    part += token;
+  }
+  if (part.trim()) parts.push(part);
+  return parts;
+}
+
 export function createRuntime({ client, tracker, store, now = Date.now, render = renderLeaderboard, renderTime = renderUserTime }) {
   const sending = new Set();
   const suspendedShards = new Set();
@@ -62,7 +77,14 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
         if (stopped || tracker.config(guild.id) !== config || config.alertChannelId !== alertChannelId
           || tracker.pendingAlert(guild.id) !== alert) return;
         if (!channel?.isSendable()) throw new Error('Alert channel is missing or cannot receive messages.');
-        await channel.send({ embeds: [embed('Voice channel update', config.alertMessage)], allowedMentions: { parse: [] } });
+        alert.parts ??= alertParts(config.alertMessage);
+        alert.nextPart ??= 0;
+        while (alert.nextPart < alert.parts.length) {
+          if (stopped || tracker.config(guild.id) !== config || config.alertChannelId !== alertChannelId
+            || tracker.pendingAlert(guild.id) !== alert) return;
+          await channel.send({ content: alert.parts[alert.nextPart], allowedMentions: { parse: ['users'] } });
+          alert.nextPart++;
+        }
         alert.sent = true;
       } catch (error) {
         console.error(`Alert failed in server ${guild.id}; will retry on the next poll:`, error.message);
@@ -105,11 +127,11 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
       const me = guild.members.me ?? await guild.members.fetchMe();
       const canView = channel.permissionsFor(me)?.has(PermissionFlagsBits.ViewChannel);
       const canSend = alerts.permissionsFor(me)?.has([
-        PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+        PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
         ...(alerts.type === ChannelType.GuildVoice ? [PermissionFlagsBits.Connect] : []),
       ]);
       if (!canView || !canSend) {
-        return edit('Missing permissions', 'I need View Channel on the voice channel, and View Channel, Send Messages, and Embed Links in the alert channel (plus Connect for voice-channel chat).');
+        return edit('Missing permissions', 'I need View Channel on the voice channel, and View Channel and Send Messages in the alert channel (plus Connect for voice-channel chat).');
       }
       const message = interaction.options.getString('message')?.trim();
       if (message !== undefined && !message) return edit('Invalid message', 'The alert message cannot be blank.');
@@ -129,10 +151,10 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
       }
       const me = guild.members.me ?? await guild.members.fetchMe();
       if (!channel.permissionsFor(me)?.has([
-        PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+        PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
         ...(channel.type === ChannelType.GuildVoice ? [PermissionFlagsBits.Connect] : []),
       ])) {
-        return edit('Missing permissions', 'I need View Channel, Send Messages, and Embed Links in the alert channel (plus Connect for voice-channel chat).');
+        return edit('Missing permissions', 'I need View Channel and Send Messages in the alert channel (plus Connect for voice-channel chat).');
       }
       tracker.config(guild.id).alertChannelId = channel.id;
       await store.save();

@@ -17,7 +17,7 @@ export const commands = [
     .setDescription('Change this server’s solo alert message (server owner or whitelist only).')
     .setContexts(InteractionContextType.Guild)
     .addStringOption(option => option.setName('text')
-      .setDescription('Text to show in the blue alert embed').setRequired(true).setMinLength(1).setMaxLength(4000)),
+      .setDescription('Plain-text alert; user mentions can ping').setRequired(true).setMinLength(1).setMaxLength(4000)),
   new SlashCommandBuilder()
     .setName('alert-channel')
     .setDescription('Change this server’s alert destination (server owner or whitelist only).')
