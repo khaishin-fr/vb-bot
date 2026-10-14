@@ -1,13 +1,13 @@
 import { AttachmentBuilder, ChannelType, EmbedBuilder, MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { BLUE, canConfigure } from '../config.js';
-import { duration, renderLeaderboard } from './leaderboard.js';
+import { duration, renderLeaderboard, renderUserTime } from './leaderboard.js';
 import { createPersistentLeaderboards } from './persistent-leaderboard.js';
 
 export const embed = (title, description) => new EmbedBuilder()
   .setColor(BLUE).setTitle(title).setDescription(description)
   .setFooter({ text: 'Voice activity' }).setTimestamp();
 
-export function createRuntime({ client, tracker, store, now = Date.now, render = renderLeaderboard }) {
+export function createRuntime({ client, tracker, store, now = Date.now, render = renderLeaderboard, renderTime = renderUserTime }) {
   const sending = new Set();
   const suspendedShards = new Set();
   let stopped = false;
@@ -56,9 +56,11 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
       if (sending.has(guild.id)) return;
       sending.add(guild.id);
       try {
-        const channel = await guild.channels.fetch(config.alertChannelId);
+        const alertChannelId = config.alertChannelId;
+        const channel = await guild.channels.fetch(alertChannelId);
         // Recheck after fetching: a user could have joined or configuration changed.
-        if (stopped || tracker.config(guild.id) !== config || tracker.pendingAlert(guild.id) !== alert) return;
+        if (stopped || tracker.config(guild.id) !== config || config.alertChannelId !== alertChannelId
+          || tracker.pendingAlert(guild.id) !== alert) return;
         if (!channel?.isSendable()) throw new Error('Alert channel is missing or cannot receive messages.');
         await channel.send({ embeds: [embed('Voice channel update', config.alertMessage)], allowedMentions: { parse: [] } });
         alert.sent = true;
@@ -73,12 +75,12 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
 
   async function onInteraction(interaction) {
     if (stopped) return;
-    if (!interaction.isChatInputCommand() || !['configure', 'message', 'leaderboard', 'leaderboard-channel', 'leaderboard-stop', 'mytime'].includes(interaction.commandName)) return;
+    if (!interaction.isChatInputCommand() || !['configure', 'message', 'alert-channel', 'leaderboard', 'leaderboard-channel', 'leaderboard-stop', 'mytime'].includes(interaction.commandName)) return;
     const reply = (title, description) => interaction.reply({
       embeds: [embed(title, description)], flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] },
     });
     if (!interaction.inGuild()) return reply('Server only', 'Run this command in your Discord server.');
-    if (['configure', 'message', 'leaderboard-channel', 'leaderboard-stop'].includes(interaction.commandName)
+    if (['configure', 'message', 'alert-channel', 'leaderboard-channel', 'leaderboard-stop'].includes(interaction.commandName)
       && !canConfigure(interaction.user.id, interaction.guild?.ownerId)) {
       return reply('Access denied', 'Only this server’s owner or a user listed in config.js can change its settings.');
     }
@@ -118,11 +120,47 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
     }
     const config = tracker.config(guild.id);
     if (!config) return edit('Not configured', 'Ask this server’s owner or a whitelisted user to run /configure first.');
+    if (interaction.commandName === 'alert-channel') {
+      const selected = interaction.options.getChannel('channel', true);
+      const channel = await guild.channels.fetch(selected.id).catch(() => null);
+      if (!channel || channel.guildId !== guild.id
+        || ![ChannelType.GuildText, ChannelType.GuildVoice].includes(channel.type)) {
+        return edit('Invalid alert channel', 'Choose a text or voice channel in this server.');
+      }
+      const me = guild.members.me ?? await guild.members.fetchMe();
+      if (!channel.permissionsFor(me)?.has([
+        PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+        ...(channel.type === ChannelType.GuildVoice ? [PermissionFlagsBits.Connect] : []),
+      ])) {
+        return edit('Missing permissions', 'I need View Channel, Send Messages, and Embed Links in the alert channel (plus Connect for voice-channel chat).');
+      }
+      tracker.config(guild.id).alertChannelId = channel.id;
+      await store.save();
+      return edit('Alert channel updated', `Future solo alerts will be sent to <#${channel.id}>.`);
+    }
     if (interaction.commandName === 'mytime') {
+      if (!interaction.appPermissions?.has([PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.AttachFiles])) {
+        return edit('Missing permissions', 'I need Embed Links and Attach Files in this channel to send your voice-time image.');
+      }
       syncGuild(guild);
       const totalMs = tracker.userTime(guild.id, interaction.user.id, now());
       await store.save();
-      return edit('Your voice time', `Your total time in <#${config.voiceChannelId}> is **${duration(totalMs)}**.`);
+      const member = interaction.member;
+      const saved = config.channels[config.voiceChannelId].users[interaction.user.id];
+      const png = await renderTime({
+        guildName: guild.name,
+        channelName: guild.channels.cache.get(config.voiceChannelId)?.name ?? 'Voice channel',
+        name: member?.displayName ?? member?.nick ?? interaction.user.globalName
+          ?? interaction.user.username ?? saved?.name ?? 'Member',
+        avatarUrl: member?.displayAvatarURL?.({ extension: 'png', size: 256 })
+          ?? interaction.user.displayAvatarURL?.({ extension: 'png', size: 256 }) ?? saved?.avatarUrl,
+        totalMs,
+      });
+      return interaction.editReply({
+        embeds: [embed('Your voice time', `Your total time in <#${config.voiceChannelId}> is **${duration(totalMs)}**.`)
+          .setImage('attachment://mytime.png')],
+        files: [new AttachmentBuilder(png, { name: 'mytime.png' })], allowedMentions: { parse: [] },
+      });
     }
     if (interaction.commandName === 'message') {
       const message = interaction.options.getString('text', true).trim();
@@ -136,7 +174,7 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
       try {
         const board = await persistent.set(guild, channel.id);
         if (!board) return edit('Temporarily unavailable', 'Please try again after the connection recovers.');
-        return edit('Live leaderboard enabled', `The leaderboard in <#${board.channelId}> updates every 5 minutes and resumes after restarts.`);
+        return edit('Live leaderboard enabled', `The leaderboard in <#${board.channelId}> is deleted and reposted with an updated image every 30 seconds and resumes after restarts.`);
       } catch (error) {
         return edit('Could not set up the leaderboard', error.message);
       }

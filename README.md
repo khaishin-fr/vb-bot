@@ -28,14 +28,17 @@ To copy Discord IDs, enable **User Settings → Advanced → Developer Mode**, t
 | `/configure voice-channel-id:123456789012345678` | This server's owner / code whitelist | Monitors that channel and posts alerts to its voice-channel chat. |
 | `/configure voice-channel-id:123456789012345678 alerts-channel:#general message:Someone needs company!` | This server's owner / code whitelist | Sets this server's channel, alert destination, and message together. |
 | `/message text:Come join the voice channel!` | This server's owner / code whitelist | Changes only this server's alert text. Configure a channel first. |
+| `/alert-channel channel:#alerts` | This server's owner / code whitelist | Saves this server's alert destination in MongoDB. Configure a voice channel first. |
 | `/leaderboard` | Everyone with access to the command | Posts a blue PNG with member avatars and the top 10 individual user VC times. |
-| `/mytime` | Everyone with access to the command | Publicly shows your total time in this server's configured voice channel, including your current session. |
-| `/leaderboard-channel channel:#leaderboard` | This server's owner / code whitelist | Posts one persistent leaderboard in that channel and updates the same message every five minutes. |
+| `/mytime` | Everyone with access to the command | Publicly posts a blue image card with your avatar, name, and total time in this server's configured voice channel, including your current session. Requires Embed Links and Attach Files. |
+| `/leaderboard-channel channel:#leaderboard` | This server's owner / code whitelist | Posts a leaderboard, then deletes and reposts it with an updated image every 30 seconds. |
 | `/leaderboard-stop` | This server's owner / code whitelist | Stops automatic updates, leaving the last image in place. |
+
+`/alert-channel` accepts a text channel or voice-channel chat. The bot needs **View Channel**, **Send Messages**, and **Embed Links** there (plus **Connect** for voice-channel chat). Changing the destination preserves voice times and the custom message; an already-delivered solo alert is not resent.
 
 The persistent leaderboard includes member avatars and individual user VC times, just like `/leaderboard`. Configure the monitored voice channel first. Grant the bot **View Channel**, **Send Messages**, **Embed Links**, **Attach Files**, and **Read Message History** in the leaderboard channel (plus **Connect** for voice-channel chat).
 
-Each server has one automatically updated leaderboard. Its channel/message IDs are saved in MongoDB, and the bot refreshes it on startup and every five minutes while connected. Running `/leaderboard-channel` again in the same channel updates the existing message; choosing a different channel moves it and attempts to remove the old bot message. A deleted leaderboard message is recreated on the next update. Missing channel permissions or network errors are logged and retried at the next interval. Changing the monitored voice channel preserves the persistent message and shows the newly configured channel's statistics on the next update. The message stays in its original position in chat; it is not automatically pinned or reposted to the bottom.
+Each server has one automatically updated leaderboard. Its channel/message IDs are saved in MongoDB, and the bot refreshes it on startup and every 30 seconds while connected. Each refresh builds a new image, deletes the previous bot message, and sends a new message at the bottom of the channel. Running `/leaderboard-channel` again in the same channel also replaces the message; choosing a different channel moves it and attempts to remove the old bot message. A deleted leaderboard message is recreated on the next update. Missing channel permissions or network errors are logged and retried at the next interval. If sending fails after deletion, the leaderboard is absent until a retry succeeds. Changing the monitored voice channel shows the newly configured channel's statistics on the next update. `/leaderboard-stop` stops reposting and leaves the last message in place.
 
 After installing this update, rerun `npm run register` (or the Docker registration command above) to expose the new slash commands. The GitHub deployment workflow registers them automatically.
 
@@ -52,7 +55,7 @@ The bot checks every **five seconds**. It sends once per solo stay, resetting wh
 - Time while the bot is offline or disconnected is excluded. Users already connected at startup are tracked from startup. A sudden crash/disconnect may lose time since the latest checkpoint (normally at most five seconds). A solo stay may alert again after restart.
 - Run **one bot process** for this token/database; it supports many Discord servers. Multiple replicas sharing live session tracking are not supported.
 - MongoDB data survives `docker compose down` and rebuilds. **`docker compose down -v` deletes the database volume.** Use MongoDB backup tools before deleting volumes. Root credentials initialize a new volume only; editing `.env` does not change credentials in an existing database.
-- Deleted or inaccessible alert channels produce log errors; run `/configure` with a valid channel. A database failure during polling stops the bot so Compose can restart it; failed command writes report an error and can retry on the next checkpoint.
+- Deleted or inaccessible alert channels produce log errors; run `/alert-channel` with a valid channel. A database failure during polling stops the bot so Compose can restart it; failed command writes report an error and can retry on the next checkpoint.
 - After changing the whitelist, run `docker compose up -d --build bot`. After changing command definitions, rerun registration. Registration replaces this app's commands in the chosen scope. Remove old server-scoped registrations if you switch to global registration and see duplicates.
 
 ## Local development

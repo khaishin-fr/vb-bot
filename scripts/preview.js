@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { renderLeaderboard } from '../src/leaderboard.js';
+import { renderLeaderboard, renderUserTime } from '../src/leaderboard.js';
 import { createCanvas } from '@napi-rs/canvas';
 
 // Stand-in profile pictures for the offline preview, not real Discord members.
@@ -36,3 +36,8 @@ writeFileSync(new URL('leaderboard.png', directory), await renderLeaderboard({
   ],
 }, { avatarLoader: async index => sampleAvatar(index) }));
 console.log('Created preview/leaderboard.png with sample data.');
+writeFileSync(new URL('mytime.png', directory), await renderUserTime({
+  guildName: 'The Hangout', channelName: 'General Voice', name: 'James',
+  totalMs: 54_750_000, avatarUrl: 0,
+}, { avatarLoader: async index => sampleAvatar(index) }));
+console.log('Created preview/mytime.png with sample data.');

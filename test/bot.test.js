@@ -17,7 +17,7 @@ const permissions = new PermissionsBitField([
   PermissionFlagsBits.AttachFiles, PermissionFlagsBits.Connect, PermissionFlagsBits.ReadMessageHistory,
 ]);
 
-function fixture() {
+function fixture(options = {}) {
   const store = { data: { guilds: {} }, save: async () => {} };
   const tracker = new VoiceTracker(store);
   tracker.configure(G, V, V, 0);
@@ -35,7 +35,7 @@ function fixture() {
     guilds.set(id, guild);
   }
   const client = { guilds: { cache: guilds }, isReady: () => true };
-  const runtime = createRuntime({ client, tracker, store, now: () => time });
+  const runtime = createRuntime({ client, tracker, store, now: () => time, ...options });
   function members(guildId, list) {
     const guild = guilds.get(guildId);
     const channelId = tracker.config(guildId).voiceChannelId;
@@ -226,7 +226,7 @@ test('renderer supports empty boards, long names, and a ten-row cap', async () =
 });
 
 test('slash commands serialize with custom message length limits', () => {
-  assert.deepEqual(commands.map(command => command.name), ['configure', 'message', 'leaderboard', 'leaderboard-channel', 'leaderboard-stop', 'mytime']);
+  assert.deepEqual(commands.map(command => command.name), ['configure', 'message', 'alert-channel', 'leaderboard', 'leaderboard-channel', 'leaderboard-stop', 'mytime']);
   assert.equal(commands[1].options[0].max_length, 4000);
 });
 
@@ -405,13 +405,13 @@ test('persistent leaderboard IDs survive MongoDB reload and voice channel reconf
   assert.deepEqual(db.collection('guilds').docs.get(G).leaderboard, { channelId: V, messageId: B });
 });
 
-test('owner command posts a persistent PNG, runtime refresh edits it, and stop disables it', async () => {
+test('owner command posts a persistent PNG, runtime refresh reposts it, and stop disables it', async () => {
   const f = fixture();
   const channel = f.guilds.get(G).channels.cache.get(V);
   let sent;
-  let edited;
-  const message = { id: B, edit: async payload => { edited = payload; return message; } };
-  channel.send = async payload => { sent = payload; return message; };
+  const events = [];
+  const message = { id: B, delete: async () => { events.push('delete'); } };
+  channel.send = async payload => { events.push('send'); sent = payload; return message; };
   channel.messages = { fetch: async () => message };
   const setup = f.interaction('leaderboard-channel', G, G, { channel });
   await f.runtime.onInteraction(setup);
@@ -419,7 +419,8 @@ test('owner command posts a persistent PNG, runtime refresh edits it, and stop d
   assert.equal(sent.files[0].attachment.subarray(1, 4).toString(), 'PNG');
   assert.equal(f.tracker.config(G).leaderboard.messageId, B);
   await f.runtime.refreshLeaderboards();
-  assert.deepEqual(edited.attachments, []);
+  assert.deepEqual(events, ['send', 'delete', 'send']);
+  assert.equal(sent.files[0].attachment.subarray(1, 4).toString(), 'PNG');
   await f.runtime.onInteraction(f.interaction('leaderboard-stop'));
   assert.equal(f.tracker.config(G).leaderboard, null);
 });
@@ -437,6 +438,8 @@ test('/mytime is available to regular members, public, and includes saved plus c
   assert.equal(reply.title, 'Your voice time');
   assert.equal(reply.color, BLUE);
   assert.equal(reply.description, `Your total time in <#${V}> is **1m 5s**.`);
+  assert.equal(reply.image.url, 'attachment://mytime.png');
+  assert.equal(interaction.replies[0].files[0].attachment.subarray(1, 4).toString(), 'PNG');
   assert.equal(f.tracker.config(G).channels[V].users[U].totalMs, 65000);
 });
 
@@ -468,4 +471,132 @@ test('/mytime rejects DMs without accessing server statistics', async () => {
   await f.runtime.onInteraction(interaction);
   assert.equal(interaction.replies[0].embeds[0].data.title, 'Server only');
   assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
+});
+
+function addAlertChannel(f, overrides = {}) {
+  const guild = f.guilds.get(G);
+  const channel = { id: B, guildId: G, type: ChannelType.GuildText,
+    permissionsFor: () => permissions, isSendable: () => true,
+    send: async payload => f.sent.push({ channelId: B, ...payload }), ...overrides };
+  guild.channels.cache.set(channel.id, channel);
+  guild.channels.fetch = async id => guild.channels.cache.get(id) ?? null;
+  return channel;
+}
+
+test('/alert-channel persists the destination, preserves tracking, and routes future alerts', async () => {
+  const f = fixture();
+  const db = fakeDatabase();
+  const mongo = new MongoStore(db);
+  mongo.data = f.store.data;
+  f.store.save = () => mongo.save();
+  f.members(G, [human()]);
+  await f.runtime.tick();
+  const channel = addAlertChannel(f);
+  const interaction = f.interaction('alert-channel', G, G, { channel });
+  await f.runtime.onInteraction(interaction);
+  assert.equal(interaction.replies[0].embeds[0].data.title, 'Alert channel updated');
+  assert.equal(interaction.replies[0].embeds[0].data.color, BLUE);
+  assert.equal(interaction.deferred[0].flags, MessageFlags.Ephemeral);
+  f.setTime(5000);
+  await f.runtime.tick();
+  assert.equal(f.sent.length, 1); // A delivered solo alert is not resent.
+  assert.equal(f.tracker.userTime(G, U, 5000), 5000);
+  f.members(G, []);
+  f.members(G, [human()]);
+  await f.runtime.tick();
+  assert.equal(f.sent[1].channelId, B);
+  const restored = new MongoStore(db);
+  await restored.load();
+  assert.equal(restored.data.guilds[G].alertChannelId, B);
+  assert.equal(restored.data.guilds[G].voiceChannelId, V);
+  assert.equal(restored.data.guilds[G].alertMessage, 'only one person in vc');
+  assert.equal(restored.data.guilds[H].alertChannelId, W);
+});
+
+test('/alert-channel authorizes only the server owner or code whitelist', async () => {
+  const f = fixture();
+  const channel = addAlertChannel(f);
+  for (const userId of [U, H]) {
+    const denied = f.interaction('alert-channel', G, userId, { channel });
+    await f.runtime.onInteraction(denied);
+    assert.equal(denied.replies[0].embeds[0].data.title, 'Access denied');
+    assert.equal(f.tracker.config(G).alertChannelId, V);
+  }
+  WHITELISTED_USER_IDS.push(U);
+  try {
+    await f.runtime.onInteraction(f.interaction('alert-channel', G, U, { channel }));
+    assert.equal(f.tracker.config(G).alertChannelId, B);
+  } finally { WHITELISTED_USER_IDS.pop(); }
+});
+
+test('/alert-channel rejects missing, foreign, unsupported, and inaccessible channels', async () => {
+  for (const overrides of [
+    { guildId: H }, { type: ChannelType.GuildCategory },
+    { permissionsFor: () => new PermissionsBitField() },
+    { type: ChannelType.GuildVoice, permissionsFor: () => new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
+    ]) },
+    null,
+  ]) {
+    const f = fixture();
+    const channel = addAlertChannel(f, overrides ?? {});
+    if (!overrides) f.guilds.get(G).channels.cache.delete(channel.id);
+    const interaction = f.interaction('alert-channel', G, G, { channel });
+    await f.runtime.onInteraction(interaction);
+    assert.match(interaction.replies[0].embeds[0].data.title, /Invalid alert channel|Missing permissions/);
+    assert.equal(f.tracker.config(G).alertChannelId, V);
+  }
+});
+
+test('/alert-channel requires configuration and supports voice-channel chat', async () => {
+  const f = fixture();
+  const channel = addAlertChannel(f, { type: ChannelType.GuildVoice });
+  await f.runtime.onInteraction(f.interaction('alert-channel', G, G, { channel }));
+  assert.equal(f.tracker.config(G).alertChannelId, B);
+  delete f.store.data.guilds[G];
+  const interaction = f.interaction('alert-channel', G, G, { channel });
+  await f.runtime.onInteraction(interaction);
+  assert.equal(interaction.replies[0].embeds[0].data.title, 'Not configured');
+});
+
+test('changing alert destination during channel lookup skips the old destination', async () => {
+  const f = fixture();
+  const guild = f.guilds.get(G);
+  const channel = addAlertChannel(f);
+  const fetch = guild.channels.fetch;
+  f.members(G, [human()]);
+  guild.channels.fetch = async id => {
+    if (id === V) await f.runtime.onInteraction(f.interaction('alert-channel', G, G, { channel }));
+    return fetch(id);
+  };
+  await f.runtime.tick();
+  assert.equal(f.sent.length, 0);
+  await f.runtime.tick();
+  assert.equal(f.sent[0].channelId, B);
+});
+
+test('/mytime renders the requesting member’s server profile and live time', async () => {
+  let rendered;
+  const f = fixture({ renderTime: async data => { rendered = data; return Buffer.from('image'); } });
+  f.members(G, [human()]);
+  f.setTime(5000);
+  const interaction = f.interaction('mytime', G, U);
+  interaction.member = { displayName: 'Server nickname', displayAvatarURL: () => 'server-avatar' };
+  interaction.user.displayAvatarURL = () => 'global-avatar';
+  await f.runtime.onInteraction(interaction);
+  assert.deepEqual(rendered, { guildName: `Guild ${G}`, channelName: 'Voice', name: 'Server nickname',
+    avatarUrl: 'server-avatar', totalMs: 5000 });
+  delete interaction.member;
+  interaction.user.username = 'Global name';
+  await f.runtime.onInteraction(interaction);
+  assert.equal(rendered.name, 'Global name');
+  assert.equal(rendered.avatarUrl, 'global-avatar');
+});
+
+test('/mytime checks image permissions before rendering', async () => {
+  const f = fixture({ renderTime: async () => { assert.fail('Must not render without permissions'); } });
+  const interaction = f.interaction('mytime', G, U);
+  interaction.appPermissions = new PermissionsBitField(PermissionFlagsBits.EmbedLinks);
+  await f.runtime.onInteraction(interaction);
+  assert.equal(interaction.replies[0].embeds[0].data.title, 'Missing permissions');
 });

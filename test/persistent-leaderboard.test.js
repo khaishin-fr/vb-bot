@@ -6,7 +6,7 @@ import { LEADERBOARD_INTERVAL_MS } from '../config.js';
 
 function fixture() {
   const configs = { one: {}, two: {} };
-  const calls = { sends: [], edits: [], deletes: [], saves: 0 };
+  const calls = { sends: [], edits: [], deletes: [], events: [], saves: 0 };
   const messages = new Map();
   const permissions = new PermissionsBitField([
     PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
@@ -21,10 +21,11 @@ function fixture() {
         return messages.get(messageId);
       } },
       send: async payload => {
+        calls.events.push('send');
         calls.sends.push({ id, payload });
         const message = { id: String(++counter),
           edit: async updated => { calls.edits.push({ id: message.id, payload: updated }); return message; },
-          delete: async () => { calls.deletes.push(message.id); messages.delete(message.id); },
+          delete: async () => { calls.events.push('delete'); calls.deletes.push(message.id); messages.delete(message.id); },
         };
         messages.set(message.id, message);
         return message;
@@ -46,17 +47,19 @@ function fixture() {
   return { configs, calls, messages, channels, guilds, store, options, manager: createPersistentLeaderboards(options) };
 }
 
-test('persistent leaderboard creates once, then edits and replaces the old image attachment', async () => {
+test('persistent leaderboard deletes before reposting and saves the new ID every 30 seconds', async () => {
   const f = fixture();
   const guild = f.guilds.get('one');
   await f.manager.set(guild, 'first');
   assert.deepEqual(f.configs.one.leaderboard, { channelId: 'first', messageId: '1' });
   await f.manager.refresh();
   await f.manager.set(guild, 'first');
-  assert.equal(f.calls.sends.length, 1);
-  assert.equal(f.calls.edits.length, 2);
-  assert.deepEqual(f.calls.edits[0].payload.attachments, []);
-  assert.equal(LEADERBOARD_INTERVAL_MS, 300000);
+  assert.equal(f.calls.sends.length, 3);
+  assert.equal(f.calls.edits.length, 0);
+  assert.deepEqual(f.calls.events, ['send', 'delete', 'send', 'delete', 'send']);
+  assert.deepEqual([...f.messages.keys()], ['3']);
+  assert.equal(f.configs.one.leaderboard.messageId, '3');
+  assert.equal(LEADERBOARD_INTERVAL_MS, 30000);
 });
 
 test('a restarted manager resumes the saved message and keeps servers separate', async () => {
@@ -65,8 +68,10 @@ test('a restarted manager resumes the saved message and keeps servers separate',
   await f.manager.set(f.guilds.get('two'), 'other');
   const restarted = createPersistentLeaderboards(f.options);
   await restarted.refresh();
-  assert.equal(f.calls.sends.length, 2);
-  assert.deepEqual(f.calls.edits.map(call => call.payload.embeds[0].title).sort(), ['one', 'two']);
+  assert.equal(f.calls.sends.length, 4);
+  assert.deepEqual(f.calls.sends.slice(2).map(call => call.payload.embeds[0].title).sort(), ['one', 'two']);
+  assert.deepEqual(f.calls.deletes.sort(), ['1', '2']);
+  assert.equal(f.messages.size, 2);
 });
 
 test('deleted messages are recreated with a new saved ID', async () => {
@@ -109,8 +114,9 @@ test('stop disables updates, leaving the last posted image intact', async () => 
 test('concurrent setup calls serialize instead of creating duplicates', async () => {
   const f = fixture();
   await Promise.all([f.manager.set(f.guilds.get('one'), 'first'), f.manager.set(f.guilds.get('one'), 'first')]);
-  assert.equal(f.calls.sends.length, 1);
-  assert.equal(f.calls.edits.length, 1);
+  assert.equal(f.calls.sends.length, 2);
+  assert.deepEqual(f.calls.deletes, ['1']);
+  assert.equal(f.messages.size, 1);
 });
 
 test('unavailable guilds are skipped and cross-server destinations rejected', async () => {
@@ -135,6 +141,50 @@ test('failed database save retains the posted ID for the next retry', async t =>
   await assert.rejects(f.manager.set(f.guilds.get('one'), 'first'), /Database unavailable/);
   t.mock.method(console, 'error', () => {});
   await f.manager.refresh();
+  assert.equal(f.calls.sends.length, 2);
+  assert.deepEqual(f.calls.deletes, ['1']);
+  assert.equal(f.configs.one.leaderboard.messageId, '2');
+  assert.equal(f.messages.size, 1);
+});
+
+test('delete failures leave the existing board intact without sending another', async t => {
+  const f = fixture();
+  await f.manager.set(f.guilds.get('one'), 'first');
+  f.messages.get('1').delete = async () => { throw new Error('Missing access'); };
+  t.mock.method(console, 'error', () => {});
+  await f.manager.refresh();
   assert.equal(f.calls.sends.length, 1);
-  assert.equal(f.calls.edits.length, 1);
+  assert.ok(f.messages.has('1'));
+});
+
+test('a failed send after deletion recovers on the next refresh with freshly generated content', async t => {
+  const f = fixture();
+  let generation = 0;
+  const manager = createPersistentLeaderboards({ ...f.options,
+    buildPayload: async () => ({ files: [`image-${++generation}`] }),
+  });
+  await manager.set(f.guilds.get('one'), 'first');
+  const channel = f.channels.get('first');
+  const send = channel.send;
+  channel.send = async () => { throw new Error('Temporary network failure'); };
+  t.mock.method(console, 'error', () => {});
+  await manager.refresh();
+  assert.equal(f.messages.size, 0);
+  channel.send = send;
+  await manager.refresh();
+  assert.equal(f.messages.size, 1);
+  assert.equal(f.configs.one.leaderboard.messageId, '2');
+  assert.deepEqual(f.calls.sends[1].payload.files, ['image-3']);
+});
+
+test('a message deleted between lookup and delete still gets replaced', async () => {
+  const f = fixture();
+  await f.manager.set(f.guilds.get('one'), 'first');
+  f.messages.get('1').delete = async () => {
+    f.messages.delete('1');
+    throw Object.assign(new Error('Unknown Message'), { code: 10008 });
+  };
+  await f.manager.refresh();
+  assert.deepEqual([...f.messages.keys()], ['2']);
+  assert.equal(f.configs.one.leaderboard.messageId, '2');
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { loadAvatar, renderLeaderboard } from '../src/leaderboard.js';
+import { loadAvatar, renderLeaderboard, renderUserTime } from '../src/leaderboard.js';
 
 const url = 'https://cdn.discordapp.com/avatars/123/avatar.png?size=128';
 function avatar() {
@@ -34,4 +34,18 @@ test('renderer paints an avatar next to the name and tolerates failed avatar loa
   const ctx = canvas.getContext('2d');
   ctx.drawImage(await loadImage(png), 0, 0);
   assert.deepEqual([...ctx.getImageData(140, 194, 1, 1).data], [255, 0, 0, 255]);
+});
+
+test('personal time card paints the avatar and renders zero time with long names and avatar failures', async () => {
+  const input = { guildName: 'Server', channelName: 'Voice', name: 'Member', totalMs: 65000, avatarUrl: url };
+  const png = await renderUserTime(input, { avatarLoader: async () => avatar() });
+  const canvas = createCanvas(1000, 400);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(await loadImage(png), 0, 0);
+  assert.deepEqual([...ctx.getImageData(130, 249, 1, 1).data], [255, 0, 0, 255]);
+  const fallback = await renderUserTime({ ...input, name: 'Long name '.repeat(100),
+    guildName: 'Long server '.repeat(100), totalMs: 0 },
+  { avatarLoader: async () => { throw new Error('Unavailable'); } });
+  assert.equal(fallback.readUInt32BE(16), 1000);
+  assert.equal(fallback.readUInt32BE(20), 400);
 });

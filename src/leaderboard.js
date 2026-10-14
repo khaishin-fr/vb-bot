@@ -27,6 +27,59 @@ function fit(ctx, value, width) {
   return `${chars.join('')}…`;
 }
 
+export async function renderUserTime({ guildName, channelName, name, avatarUrl, totalMs },
+  { avatarLoader = loadAvatar } = {}) {
+  const avatar = await avatarLoader(avatarUrl).catch(() => null);
+  const canvas = createCanvas(1000, 400);
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 1000, 400);
+  gradient.addColorStop(0, '#08152f');
+  gradient.addColorStop(1, '#123a6a');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 1000, 400);
+  ctx.fillStyle = '#60a5fa';
+  ctx.fillRect(40, 40, 6, 80);
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillText('VOICE ACTIVITY  /  ALL TIME', 64, 54);
+  ctx.fillStyle = '#eff6ff';
+  ctx.font = 'bold 38px sans-serif';
+  ctx.fillText('Your voice time', 64, 100);
+  ctx.fillStyle = '#93c5fd';
+  ctx.font = '18px sans-serif';
+  ctx.fillText(fit(ctx, `${guildName}  /  ${channelName}`, 870), 64, 134);
+  ctx.fillStyle = '#1d4e88';
+  ctx.beginPath();
+  ctx.roundRect(40, 162, 920, 174, 16);
+  ctx.fill();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(130, 249, 56, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.fillStyle = '#2563eb';
+  ctx.fillRect(74, 193, 112, 112);
+  if (avatar) {
+    ctx.drawImage(avatar, 74, 193, 112, 112);
+  } else {
+    ctx.fillStyle = '#eff6ff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.fillText(Array.from(name.trim())[0]?.toUpperCase() || '?', 130, 266);
+  }
+  ctx.restore();
+  ctx.fillStyle = '#bfdbfe';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText(fit(ctx, name, 700), 218, 213);
+  ctx.fillStyle = '#eff6ff';
+  ctx.font = 'bold 52px sans-serif';
+  ctx.fillText(fit(ctx, duration(totalMs), 700), 218, 274);
+  ctx.fillStyle = '#93c5fd';
+  ctx.font = '16px sans-serif';
+  ctx.fillText('TOTAL TIME IN VOICE', 220, 307);
+  ctx.font = '14px sans-serif';
+  ctx.fillText('Connected time  •  Includes your current session', 40, 374);
+  return canvas.encode('png');
+}
+
 export async function renderLeaderboard({ guildName, channelName, entries },
   { avatarLoader = loadAvatar } = {}) {
   const rows = entries.slice(0, 10);

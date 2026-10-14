@@ -4,7 +4,7 @@ export const WHITELISTED_USER_IDS = [
 ];
 
 export const POLL_INTERVAL_MS = 5_000;
-export const LEADERBOARD_INTERVAL_MS = 5 * 60_000;
+export const LEADERBOARD_INTERVAL_MS = 30_000;
 export const BLUE = 0x3b82f6;
 export const DEFAULT_ALERT_MESSAGE = 'only one person in vc';
 

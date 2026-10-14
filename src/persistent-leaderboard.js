@@ -43,10 +43,14 @@ export function createPersistentLeaderboards({ client, tracker, store, buildPayl
     const payload = await buildPayload(guild);
     const message = previous?.channelId === channelId ? await existing(channel, previous.messageId) : null;
     if (!available(guild)) return;
-    const posted = message
-      ? await message.edit({ ...payload, attachments: [] })
-      : await channel.send(payload);
-    // Keep the successful send ID in memory even if saving fails, so a later retry edits it.
+    if (message) {
+      try { await message.delete(); } catch (error) {
+        // A concurrent deletion is harmless; other failures must not leave duplicate boards.
+        if (error.code !== 10008) throw error;
+      }
+    }
+    const posted = await channel.send(payload);
+    // Keep the new ID even if saving fails, so the next refresh can remove this message.
     const board = { channelId, messageId: posted.id };
     tracker.config(guild.id).leaderboard = board;
     await store.save();

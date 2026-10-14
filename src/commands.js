@@ -19,12 +19,19 @@ export const commands = [
     .addStringOption(option => option.setName('text')
       .setDescription('Text to show in the blue alert embed').setRequired(true).setMinLength(1).setMaxLength(4000)),
   new SlashCommandBuilder()
+    .setName('alert-channel')
+    .setDescription('Change this server’s alert destination (server owner or whitelist only).')
+    .setContexts(InteractionContextType.Guild)
+    .addChannelOption(option => option.setName('channel')
+      .setDescription('Where to send solo voice-channel alerts').setRequired(true)
+      .addChannelTypes(ChannelType.GuildText, ChannelType.GuildVoice)),
+  new SlashCommandBuilder()
     .setName('leaderboard')
     .setDescription('Show the top 10 users by time in the configured voice channel.')
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('leaderboard-channel')
-    .setDescription('Post a leaderboard that updates every 5 minutes (owner or whitelist only).')
+    .setDescription('Post a leaderboard that reposts every 30 seconds (owner or whitelist only).')
     .setContexts(InteractionContextType.Guild)
     .addChannelOption(option => option.setName('channel')
       .setDescription('Where to keep this server’s live leaderboard').setRequired(true)
@@ -35,6 +42,6 @@ export const commands = [
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('mytime')
-    .setDescription('Show your total time in this server’s configured voice channel.')
+    .setDescription('Show an image of your total time in this server’s configured voice channel.')
     .setContexts(InteractionContextType.Guild),
 ].map(command => command.toJSON());
