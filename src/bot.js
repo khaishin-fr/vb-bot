@@ -2,6 +2,7 @@ import { AttachmentBuilder, ChannelType, EmbedBuilder, MessageFlags, PermissionF
 import { BLUE, canConfigure } from '../config.js';
 import { duration, renderLeaderboard, renderUserTime } from './leaderboard.js';
 import { createPersistentLeaderboards } from './persistent-leaderboard.js';
+import { createLeaderboardPagination, PAGINATION_PERMISSIONS } from './leaderboard-pagination.js';
 
 export const embed = (title, description) => new EmbedBuilder()
   .setColor(BLUE).setTitle(title).setDescription(description)
@@ -23,6 +24,8 @@ function alertParts(text) {
 }
 
 export function createRuntime({ client, tracker, store, now = Date.now, render = renderLeaderboard, renderTime = renderUserTime }) {
+  const pagination = createLeaderboardPagination();
+  const pageSets = new WeakMap();
   const sending = new Set();
   const suspendedShards = new Set();
   let stopped = false;
@@ -196,7 +199,7 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
       try {
         const board = await persistent.set(guild, channel.id);
         if (!board) return edit('Temporarily unavailable', 'Please try again after the connection recovers.');
-        return edit('Live leaderboard enabled', `The leaderboard in <#${board.channelId}> is deleted and reposted with an updated image every 30 seconds and resumes after restarts.`);
+        return edit('Live leaderboard enabled', `The leaderboard in <#${board.channelId}> reposts every 30 seconds. Arrow reactions browse pages for 5 minutes; reposts pause while browsing. Updates resume after restarts.`);
       } catch (error) {
         return edit('Could not set up the leaderboard', error.message);
       }
@@ -208,7 +211,12 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
     if (!interaction.appPermissions?.has([PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.AttachFiles])) {
       return edit('Missing permissions', 'I need Embed Links and Attach Files in this channel to send the leaderboard.');
     }
-    await interaction.editReply(await buildLeaderboardPayload(guild));
+    if (!interaction.appPermissions?.has(PAGINATION_PERMISSIONS)) {
+      return edit('Missing permissions', 'I need Add Reactions, Read Message History, and Manage Messages here for leaderboard pagination and reaction cleanup.');
+    }
+    const payload = await buildLeaderboardPayload(guild);
+    const message = await interaction.editReply(payload);
+    await pagination.start(message, pageSets.get(payload));
   }
 
   async function buildLeaderboardPayload(guild) {
@@ -216,23 +224,35 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
     syncGuild(guild);
     const entries = tracker.leaderboard(guild.id, now());
     await store.save();
-    // Fetch at most ten members; server-specific avatars take priority over global ones.
-    const rows = await Promise.all(entries.slice(0, 10).map(async entry => {
-      let member = guild.members.cache?.get(entry.id);
-      if (!member) {
-        try { member = await guild.members.fetch?.({ user: entry.id }); } catch { /* Use saved avatar if they left. */ }
-      }
-      return { ...entry, name: member?.displayName ?? entry.name,
-        avatarUrl: member?.displayAvatarURL?.({ extension: 'png', size: 128 }) ?? entry.avatarUrl };
-    }));
+    // Freeze rankings for this message so users do not move between pages while browsing.
+    const snapshot = entries.map(entry => ({ ...entry }));
+    const pageCount = Math.max(1, Math.ceil(snapshot.length / 10));
     const channel = guild.channels.cache.get(config.voiceChannelId);
-    const png = await render({ guildName: guild.name, channelName: channel?.name ?? 'Voice channel', entries: rows });
-    return {
-      embeds: [embed('Voice leaderboard', `Top 10 by total time in <#${config.voiceChannelId}>.`).setImage('attachment://leaderboard.png')],
-      files: [new AttachmentBuilder(png, { name: 'leaderboard.png' })], allowedMentions: { parse: [] },
+    const buildPage = async page => {
+      const rows = await Promise.all(snapshot.slice(page * 10, (page + 1) * 10).map(async entry => {
+        let member = guild.members.cache?.get(entry.id);
+        if (!member) {
+          try { member = await guild.members.fetch?.({ user: entry.id }); } catch { /* Use the saved profile. */ }
+        }
+        return { ...entry, name: member?.displayName ?? entry.name,
+          avatarUrl: member?.displayAvatarURL?.({ extension: 'png', size: 128 }) ?? entry.avatarUrl };
+      }));
+      const png = await render({ guildName: guild.name, channelName: channel?.name ?? 'Voice channel',
+        entries: rows, page, pageCount });
+      return {
+        embeds: [embed('Voice leaderboard', `Total voice time in <#${config.voiceChannelId}>. Use 👈 / 👉 to browse for 5 minutes.`)
+          .setImage('attachment://leaderboard.png').setFooter({ text: `Page ${page + 1} / ${pageCount}` })],
+        files: [new AttachmentBuilder(png, { name: 'leaderboard.png' })], allowedMentions: { parse: [] },
+      };
     };
+    const payload = await buildPage(0);
+    pageSets.set(payload, { pageCount, buildPage });
+    return payload;
   }
   const persistent = createPersistentLeaderboards({ client, tracker, store, buildPayload: buildLeaderboardPayload,
+    onPosted: (message, payload) => pagination.start(message, pageSets.get(payload)),
+    beforeRemove: messageId => pagination.stop(messageId),
+    isBrowsing: messageId => pagination.isBrowsing(messageId),
     available: guild => !stopped && client.isReady() && guild.available && !suspendedShards.has(guild.shardId) });
-  return { refreshLeaderboards: () => persistent.refresh(), tick, syncGuild, onInteraction, suspendShard, resumeShard, stop: () => { stopped = true; } };
+  return { refreshLeaderboards: () => persistent.refresh(), tick, syncGuild, onInteraction, suspendShard, resumeShard, stop: () => { stopped = true; return pagination.stopAll(); } };
 }

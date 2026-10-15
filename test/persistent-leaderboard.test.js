@@ -11,6 +11,7 @@ function fixture() {
   const permissions = new PermissionsBitField([
     PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
     PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.AddReactions, PermissionFlagsBits.ManageMessages,
   ]);
   const channels = new Map();
   let counter = 0;
@@ -187,4 +188,25 @@ test('a message deleted between lookup and delete still gets replaced', async ()
   await f.manager.refresh();
   assert.deepEqual([...f.messages.keys()], ['2']);
   assert.equal(f.configs.one.leaderboard.messageId, '2');
+});
+
+test('automatic reposts pause during browsing, resume on expiry, and stop clears controls', async () => {
+  const f = fixture();
+  let browsing = false;
+  const started = [], stopped = [];
+  const manager = createPersistentLeaderboards({ ...f.options,
+    onPosted: async message => started.push(message.id),
+    beforeRemove: async id => stopped.push(id),
+    isBrowsing: () => browsing,
+  });
+  await manager.set(f.guilds.get('one'), 'first');
+  browsing = true;
+  await manager.refresh();
+  assert.equal(f.calls.sends.length, 1);
+  browsing = false;
+  await manager.refresh();
+  assert.deepEqual(started, ['1', '2']);
+  assert.deepEqual(stopped, ['1']);
+  await manager.stop('one');
+  assert.deepEqual(stopped, ['1', '2']);
 });

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import { ChannelType, MessageFlags, PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import { canConfigure, BLUE, WHITELISTED_USER_IDS } from '../config.js';
@@ -15,7 +16,15 @@ const human = (id = U) => ({ id, name: `User ${id}`, bot: false });
 const permissions = new PermissionsBitField([
   PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks,
   PermissionFlagsBits.AttachFiles, PermissionFlagsBits.Connect, PermissionFlagsBits.ReadMessageHistory,
+  PermissionFlagsBits.AddReactions, PermissionFlagsBits.ManageMessages,
 ]);
+
+function paginationMessage() {
+  const collector = new EventEmitter();
+  collector.stop = () => collector.emit('end');
+  return { id: 'reply', react: async () => {}, reactions: { removeAll: async () => {} },
+    createReactionCollector: () => collector, edit: async () => {} };
+}
 
 function fixture(options = {}) {
   const store = { data: { guilds: {} }, save: async () => {} };
@@ -50,7 +59,7 @@ function fixture(options = {}) {
     return { commandName, guild: guilds.get(guildId), user: { id: userId }, replies, deferred,
       appPermissions: permissions, isChatInputCommand: () => true, inGuild: () => true,
       options: { getString: name => values[name] ?? null, getChannel: name => values[name] ?? null },
-      reply: async payload => replies.push(payload), editReply: async payload => replies.push(payload),
+      reply: async payload => replies.push(payload), editReply: async payload => { replies.push(payload); return paginationMessage(); },
       deferReply: async payload => deferred.push(payload),
     };
   }
@@ -410,7 +419,7 @@ test('owner command posts a persistent PNG, runtime refresh reposts it, and stop
   const channel = f.guilds.get(G).channels.cache.get(V);
   let sent;
   const events = [];
-  const message = { id: B, delete: async () => { events.push('delete'); } };
+  const message = { ...paginationMessage(), id: B, delete: async () => { events.push('delete'); } };
   channel.send = async payload => { events.push('send'); sent = payload; return message; };
   channel.messages = { fetch: async () => message };
   const setup = f.interaction('leaderboard-channel', G, G, { channel });
@@ -637,4 +646,38 @@ test('plain-text alert destinations do not require Embed Links', async () => {
   const interaction = f.interaction('alert-channel', G, G, { channel });
   await f.runtime.onInteraction(interaction);
   assert.equal(interaction.replies[0].embeds[0].data.title, 'Alert channel updated');
+});
+
+test('leaderboard pages include every user, stable ranks, and a page footer', async () => {
+  const rendered = [];
+  const f = fixture({ render: async data => { rendered.push(data); return Buffer.from('png'); } });
+  const users = f.tracker.config(G).channels[V].users;
+  for (let i = 0; i < 23; i++) users[String(i)] = { name: `Member ${i}`, totalMs: (23 - i) * 1000 };
+  const interaction = f.interaction('leaderboard', G, U);
+  const message = paginationMessage();
+  const collector = message.createReactionCollector();
+  const edits = [];
+  message.edit = async payload => edits.push(payload);
+  interaction.editReply = async payload => { edits.push(payload); return message; };
+  await f.runtime.onInteraction(interaction);
+  assert.equal(rendered[0].entries.length, 10);
+  assert.equal(rendered[0].pageCount, 3);
+  assert.equal(edits[0].embeds[0].data.footer.text, 'Page 1 / 3');
+  // Change stored rankings after posting; navigation should keep the original snapshot.
+  users['22'].totalMs = 9999999;
+  collector.emit('collect', { emoji: { name: '👈' }, users: { remove: async () => {} } }, { id: U });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(rendered[1].page, 2);
+  assert.deepEqual(rendered[1].entries.map(entry => entry.id), ['20', '21', '22']);
+  assert.equal(rendered[1].entries[2].totalMs, 1000);
+  assert.equal(edits[1].embeds[0].data.footer.text, 'Page 3 / 3');
+  await f.runtime.stop();
+});
+
+test('leaderboard explains missing reaction cleanup permissions', async () => {
+  const f = fixture();
+  const interaction = f.interaction('leaderboard', G, U);
+  interaction.appPermissions = new PermissionsBitField([PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.AttachFiles]);
+  await f.runtime.onInteraction(interaction);
+  assert.match(interaction.replies[0].embeds[0].data.description, /Manage Messages/);
 });

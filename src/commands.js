@@ -27,7 +27,7 @@ export const commands = [
       .addChannelTypes(ChannelType.GuildText, ChannelType.GuildVoice)),
   new SlashCommandBuilder()
     .setName('leaderboard')
-    .setDescription('Show the top 10 users by time in the configured voice channel.')
+    .setDescription('Browse voice-time rankings with arrow reactions (10 users per page).')
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('leaderboard-channel')

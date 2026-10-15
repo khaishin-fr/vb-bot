@@ -80,7 +80,7 @@ export async function renderUserTime({ guildName, channelName, name, avatarUrl, 
   return canvas.encode('png');
 }
 
-export async function renderLeaderboard({ guildName, channelName, entries },
+export async function renderLeaderboard({ guildName, channelName, entries, page = 0, pageCount = 1 },
   { avatarLoader = loadAvatar } = {}) {
   const rows = entries.slice(0, 10);
   const avatars = await Promise.all(rows.map(entry => avatarLoader(entry.avatarUrl).catch(() => null)));
@@ -117,7 +117,7 @@ export async function renderLeaderboard({ guildName, channelName, entries },
     ctx.fill();
     ctx.fillStyle = '#93c5fd';
     ctx.font = 'bold 22px sans-serif';
-    ctx.fillText(String(index + 1).padStart(2, '0'), 62, y + 39);
+    ctx.fillText(String(page * 10 + index + 1).padStart(2, '0'), 62, y + 39);
     ctx.save();
     ctx.beginPath();
     ctx.arc(140, y + 32, 24, 0, Math.PI * 2);
@@ -146,6 +146,6 @@ export async function renderLeaderboard({ guildName, channelName, entries },
   });
   ctx.fillStyle = '#93c5fd';
   ctx.font = '14px sans-serif';
-  ctx.fillText(`TOP ${rows.length}  •  Connected time  •  Humans only`, 40, height - 30);
+  ctx.fillText(`PAGE ${page + 1} / ${pageCount}  •  Connected time  •  Humans only`, 40, height - 30);
   return canvas.encode('png');
 }

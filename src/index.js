@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
+import { Client, Events, GatewayIntentBits, MessageFlags, Partials } from 'discord.js';
 import { LEADERBOARD_INTERVAL_MS, POLL_INTERVAL_MS } from '../config.js';
 import { createRuntime, embed } from './bot.js';
 import { MongoStore } from './store.js';
@@ -13,7 +13,11 @@ if (!DISCORD_TOKEN || !MONGODB_URI) {
 }
 const store = await MongoStore.connect(MONGODB_URI, MONGODB_DATABASE);
 const tracker = new VoiceTracker(store);
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMessageReactions],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+});
 const runtime = createRuntime({ client, tracker, store });
 let interval;
 let leaderboardInterval;
@@ -24,7 +28,7 @@ async function stop(code = 0, checkpoint = true) {
   stopping = true;
   clearInterval(interval);
   clearInterval(leaderboardInterval);
-  runtime.stop();
+  await runtime.stop();
   try {
     if (checkpoint) {
       for (const guildId of tracker.sessions.keys()) tracker.checkpoint(guildId, Date.now());
