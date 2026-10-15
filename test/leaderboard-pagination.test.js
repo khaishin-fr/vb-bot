@@ -32,8 +32,8 @@ test('arrows wrap both directions, serialize clicks, ignore bots and unrelated e
   assert.deepEqual(f.calls.arrows, PAGE_ARROWS);
   assert.equal(f.options().time, 300000);
   assert.equal(PAGE_WINDOW_MS, 300000);
-  f.click('👈'); f.click('👉'); f.click('👉'); f.click('👉'); f.click('👉');
-  f.click('👉', true); f.click('🙂');
+  f.click('◀'); f.click('▶'); f.click('▶️'); f.click('▶️'); f.click('▶️');
+  f.click('▶️', true); f.click('🙂');
   await settle();
   assert.deepEqual(f.calls.pages, [2, 0, 1, 2, 0]);
   assert.equal(f.calls.removed.length, 5);
@@ -44,10 +44,10 @@ test('arrows wrap both directions, serialize clicks, ignore bots and unrelated e
 test('expiry removes reactions and rejects further clicks, including queued renders', async () => {
   const f = fixture();
   await f.start();
-  f.click('👉');
+  f.click('▶️');
   f.collector.stop('time');
   await settle();
-  f.click('👉');
+  f.click('▶️');
   assert.deepEqual(f.calls.pages, []);
   assert.equal(f.calls.cleanups, 1);
   assert.equal(f.manager.isBrowsing('board'), false);
@@ -56,7 +56,7 @@ test('expiry removes reactions and rejects further clicks, including queued rend
 test('empty and single-page boards loop to page one', async () => {
   const f = fixture(1);
   await f.start();
-  f.click('👈'); f.click('👉');
+  f.click('◀️'); f.click('▶️');
   await settle();
   assert.deepEqual(f.calls.pages, [0, 0]);
   await f.manager.stopAll();
@@ -68,10 +68,10 @@ test('failed edits do not advance the current page or disable future clicks', as
   await f.start();
   const edit = f.message.edit;
   f.message.edit = async () => { throw new Error('Network'); };
-  f.click('👉');
+  f.click('▶️');
   await settle();
   f.message.edit = edit;
-  f.click('👉');
+  f.click('▶️');
   await settle();
   assert.deepEqual(f.calls.pages, [1]);
   await f.manager.stopAll();
@@ -79,7 +79,7 @@ test('failed edits do not advance the current page or disable future clicks', as
 
 test('partial setup failure removes arrows and releases the session', async () => {
   const f = fixture();
-  f.message.react = async arrow => { if (arrow === '👉') throw new Error('Missing permissions'); };
+  f.message.react = async arrow => { if (arrow === '▶️') throw new Error('Missing permissions'); };
   await assert.rejects(f.start(), /Missing permissions/);
   assert.equal(f.calls.cleanups, 1);
   assert.equal(f.manager.isBrowsing('board'), false);

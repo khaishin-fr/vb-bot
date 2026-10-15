@@ -1,7 +1,8 @@
 import { PermissionFlagsBits } from 'discord.js';
 
 export const PAGE_WINDOW_MS = 5 * 60_000;
-export const PAGE_ARROWS = ['👈', '👉'];
+export const PAGE_ARROWS = ['◀️', '▶️'];
+const arrowName = reaction => reaction.emoji.name?.replace(/\uFE0F/g, '');
 export const PAGINATION_PERMISSIONS = [PermissionFlagsBits.AddReactions,
   PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages];
 
@@ -16,7 +17,7 @@ export function createLeaderboardPagination() {
     const session = { browsing: false, ended: false, queue: Promise.resolve(), cleanup: null };
     const collector = message.createReactionCollector({
       time: PAGE_WINDOW_MS,
-      filter: (reaction, user) => !user.bot && PAGE_ARROWS.includes(reaction.emoji.name),
+      filter: (reaction, user) => !user.bot && ['◀', '▶'].includes(arrowName(reaction)),
     });
     session.collector = collector;
     sessions.set(message.id, session);
@@ -26,7 +27,7 @@ export function createLeaderboardPagination() {
       session.queue = session.queue.then(async () => {
         if (session.ended) return;
         await reaction.users.remove(user.id);
-        const next = (page + (reaction.emoji.name === PAGE_ARROWS[0] ? -1 : 1) + pageCount) % pageCount;
+        const next = (page + (arrowName(reaction) === '◀' ? -1 : 1) + pageCount) % pageCount;
         const payload = await buildPage(next);
         if (session.ended) return;
         await message.edit({ ...payload, attachments: [] });

@@ -665,7 +665,7 @@ test('leaderboard pages include every user, stable ranks, and a page footer', as
   assert.equal(edits[0].embeds[0].data.footer.text, 'Page 1 / 3');
   // Change stored rankings after posting; navigation should keep the original snapshot.
   users['22'].totalMs = 9999999;
-  collector.emit('collect', { emoji: { name: '👈' }, users: { remove: async () => {} } }, { id: U });
+  collector.emit('collect', { emoji: { name: '◀️' }, users: { remove: async () => {} } }, { id: U });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(rendered[1].page, 2);
   assert.deepEqual(rendered[1].entries.map(entry => entry.id), ['20', '21', '22']);

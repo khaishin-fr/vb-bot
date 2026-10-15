@@ -240,7 +240,7 @@ export function createRuntime({ client, tracker, store, now = Date.now, render =
       const png = await render({ guildName: guild.name, channelName: channel?.name ?? 'Voice channel',
         entries: rows, page, pageCount });
       return {
-        embeds: [embed('Voice leaderboard', `Total voice time in <#${config.voiceChannelId}>. Use 👈 / 👉 to browse for 5 minutes.`)
+        embeds: [embed('Voice leaderboard', `Total voice time in <#${config.voiceChannelId}>. Use ◀️ / ▶️ to browse for 5 minutes.`)
           .setImage('attachment://leaderboard.png').setFooter({ text: `Page ${page + 1} / ${pageCount}` })],
         files: [new AttachmentBuilder(png, { name: 'leaderboard.png' })], allowedMentions: { parse: [] },
       };
